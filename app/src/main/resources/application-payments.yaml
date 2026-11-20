@@ -1,0 +1,21 @@
+payments:
+  api-access:
+    # OIDC is required unless a local/test launch deliberately opts into the single-owner demo mode.
+    mode: ${PAYMENTS_API_ACCESS_MODE:oidc}
+    trusted-demo-owner-id: ${PAYMENTS_TRUSTED_DEMO_OWNER_ID:local-demo-owner}
+  worker:
+    enabled: true
+  stripe:
+    secret-key: ${STRIPE_API_KEY}
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET}
+    client-secret-encryption-key: ${PAYMENTS_CLIENT_SECRET_ENCRYPTION_KEY}
+    blocking-io-concurrency: ${PAYMENTS_STRIPE_BLOCKING_IO_CONCURRENCY:8}
+
+  temporal:
+    task-queue: ${TEMPORAL_PAYMENT_TASK_QUEUE:kra.payment.v1}
+    checkout-window: ${PAYMENTS_CHECKOUT_WINDOW:30m}
+    processing-window: ${TEMPORAL_PAYMENT_PROCESSING_WINDOW:60m}
+    reconciliation-interval: ${TEMPORAL_PAYMENT_RECONCILIATION_INTERVAL:2m}
+    activity-start-to-close-timeout: ${TEMPORAL_PAYMENT_ACTIVITY_START_TO_CLOSE_TIMEOUT:2m}
+    activity-schedule-to-close-timeout: ${TEMPORAL_PAYMENT_ACTIVITY_SCHEDULE_TO_CLOSE_TIMEOUT:10m}
+    activity-maximum-attempts: ${TEMPORAL_PAYMENT_ACTIVITY_MAXIMUM_ATTEMPTS:3}

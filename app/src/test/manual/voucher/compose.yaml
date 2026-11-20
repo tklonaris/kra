@@ -1,0 +1,8 @@
+services:
+  voucher-manual-smoke:
+    image: jetbrains/intellij-http-client:263.7307.200
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/workdir/manual:ro
+    command: ["--no-progress", "-D", "manual/voucher-smoke.http"]

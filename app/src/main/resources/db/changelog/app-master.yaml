@@ -1,0 +1,10 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/db.changelog-master.yaml
+      relativeToChangelogFile: false
+  - include:
+      file: payment/db/changelog/master.yaml
+      relativeToChangelogFile: false
+  - include:
+      file: db/changelog/infrastructure/infrastructure-schema.sql
+      relativeToChangelogFile: false

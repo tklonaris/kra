@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: kotlin-reference-architecture
+  r2dbc:
+    url: ${KRA_DB_R2DBC_URL}
+    username: ${KRA_DB_APP_USER:kra_app}
+    password: ${KRA_DB_APP_PASSWORD}
+    pool:
+      enabled: true
+      initial-size: ${KRA_R2DBC_POOL_INITIAL_SIZE:5}
+      min-idle: ${KRA_R2DBC_POOL_MIN_IDLE:0}
+      max-size: ${KRA_R2DBC_POOL_MAX_SIZE:20}
+      max-acquire-time: ${KRA_R2DBC_POOL_MAX_ACQUIRE_TIME:20s}
+      acquire-retry: ${KRA_R2DBC_POOL_ACQUIRE_RETRY:2}
+      max-create-connection-time: ${KRA_R2DBC_POOL_MAX_CREATE_CONNECTION_TIME:5s}
+      max-validation-time: ${KRA_R2DBC_POOL_MAX_VALIDATION_TIME:10s}
+      max-idle-time: ${KRA_R2DBC_POOL_MAX_IDLE_TIME:3m}
+      max-life-time: ${KRA_R2DBC_POOL_MAX_LIFE_TIME:4m}
+      validation-depth: remote
+      validation-query: SELECT 1
+  liquibase:
+    change-log: classpath:db/changelog/app-master.yaml
+    url: ${KRA_DB_JDBC_URL}
+    user: ${KRA_DB_MIGRATOR_USER:kra_migrator}
+    password: ${KRA_DB_MIGRATOR_PASSWORD}
+    default-schema: kra
+  rabbitmq:
+    host: ${KRA_RABBITMQ_HOST:localhost}
+    port: ${KRA_RABBITMQ_PORT:5672}
+    username: ${KRA_RABBITMQ_USER:kra}
+    password: ${KRA_RABBITMQ_PASSWORD:kra-local-only}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# Shared Temporal connection; feature-specific task queues remain with their feature profile.
+temporal:
+  address: ${TEMPORAL_ADDRESS:localhost:7233}
+  namespace: ${TEMPORAL_NAMESPACE:kra}

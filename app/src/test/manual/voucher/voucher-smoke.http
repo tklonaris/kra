@@ -1,0 +1,43 @@
+###
+# Start the local infrastructure and application, then run these requests in order.
+# The HTTP client runs in Docker; host.docker.internal resolves to the application on the host.
+@apiUrl = http://host.docker.internal:8080
+
+### Readiness
+GET {{apiUrl}}/actuator/health/readiness
+
+> {%
+client.test("application is ready", () => client.assert(response.status === 200));
+%}
+
+### Create voucher
+# @name createVoucher
+POST {{apiUrl}}/vouchers
+Content-Type: application/json
+
+{
+  "initialCapacity": 1
+}
+
+> {%
+client.test("voucher is created", () => client.assert(response.status === 201));
+client.global.set("voucherId", response.body.id);
+%}
+
+### Redeem voucher
+@requestId = {{$random.uuid}}
+POST {{apiUrl}}/vouchers/{{voucherId}}/redemptions
+Idempotency-Key: {{requestId}}
+
+> {%
+client.test("redemption succeeds", () => client.assert(response.status === 200));
+client.test("redemption is successful", () => client.assert(response.body.status === "SUCCEEDED"));
+%}
+
+### Verify voucher capacity
+GET {{apiUrl}}/vouchers/{{voucherId}}
+
+> {%
+client.test("voucher can be read", () => client.assert(response.status === 200));
+client.test("voucher capacity was consumed", () => client.assert(response.body.remaining === 0));
+%}

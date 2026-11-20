@@ -1,0 +1,4 @@
+databaseChangeLog:
+  - include:
+      file: voucher-schema.sql
+      relativeToChangelogFile: true

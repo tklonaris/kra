@@ -1,0 +1,154 @@
+name: kra-infrastructure
+
+services:
+  postgres:
+    image: postgres:18.6
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: ${KRA_DB_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${KRA_DB_ADMIN_PASSWORD}
+      POSTGRES_DB: postgres
+      KRA_DB_MIGRATOR_PASSWORD: ${KRA_DB_MIGRATOR_PASSWORD}
+      KRA_DB_APP_PASSWORD: ${KRA_DB_APP_PASSWORD}
+      KRA_CDC_PASSWORD: ${KRA_CDC_PASSWORD}
+      KRA_CDC_STATE_PASSWORD: ${KRA_CDC_STATE_PASSWORD}
+      KRA_TEMPORAL_DB_PASSWORD: ${KRA_TEMPORAL_DB_PASSWORD:-temporal-local-only}
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=${KRA_POSTGRES_MAX_REPLICATION_SLOTS:-4}
+      - -c
+      - max_wal_senders=${KRA_POSTGRES_MAX_WAL_SENDERS:-4}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - kra-postgres-data:/var/lib/postgresql
+      - ./postgres/bootstrap.sql:/opt/kra/bootstrap/init.sql:ro
+      - ./postgres/init-kra.sh:/docker-entrypoint-initdb.d/10-kra-bootstrap.sh:ro
+
+  rabbitmq:
+    image: rabbitmq:4.4.0-management
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${KRA_RABBITMQ_USER:-kra}
+      RABBITMQ_DEFAULT_PASS: ${KRA_RABBITMQ_PASSWORD:-kra-local-only}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq-init:
+    image: curlimages/curl:8.11.1
+    restart: "no"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_USER: ${KRA_RABBITMQ_USER:-kra}
+      RABBITMQ_PASSWORD: ${KRA_RABBITMQ_PASSWORD:-kra-local-only}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        curl --fail --silent --show-error \
+          --user "$$RABBITMQ_USER:$$RABBITMQ_PASSWORD" \
+          --header "content-type: application/json" \
+          --request PUT \
+          --data '{"type":"fanout","durable":true,"auto_delete":false,"internal":false,"arguments":{}}' \
+          http://rabbitmq:15672/api/exchanges/%2F/kra.voucher.events
+        curl --fail --silent --show-error \
+          --user "$$RABBITMQ_USER:$$RABBITMQ_PASSWORD" \
+          --header "content-type: application/json" \
+          --request PUT \
+          --data '{"type":"fanout","durable":true,"auto_delete":false,"internal":false,"arguments":{}}' \
+          http://rabbitmq:15672/api/exchanges/%2F/kra.payment.events
+
+  rabbitmq-manual-observer-init:
+    image: curlimages/curl:8.11.1
+    profiles: ["manual-test"]
+    restart: "no"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_USER: ${KRA_RABBITMQ_USER:-kra}
+      RABBITMQ_PASSWORD: ${KRA_RABBITMQ_PASSWORD:-kra-local-only}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        curl --fail --silent --show-error \
+          --user "$$RABBITMQ_USER:$$RABBITMQ_PASSWORD" \
+          --header "content-type: application/json" \
+          --request PUT \
+          --data '{"durable":true,"auto_delete":false,"arguments":{"x-max-length":1000,"x-overflow":"drop-head"}}' \
+          http://rabbitmq:15672/api/queues/%2F/kra.voucher.events.inspect
+        curl --fail --silent --show-error \
+          --user "$$RABBITMQ_USER:$$RABBITMQ_PASSWORD" \
+          --header "content-type: application/json" \
+          --request POST \
+          --data '{"routing_key":"","arguments":{}}' \
+          http://rabbitmq:15672/api/bindings/%2F/e/kra.voucher.events/q/kra.voucher.events.inspect
+
+  temporal:
+    # auto-setup is maintained only through the 1.29 line; keep this local
+    # development image pinned to a published release.
+    image: temporalio/auto-setup:1.29.7
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: ${KRA_TEMPORAL_DB_USER:-temporal}
+      POSTGRES_PWD: ${KRA_TEMPORAL_DB_PASSWORD:-temporal-local-only}
+      DBNAME: ${KRA_TEMPORAL_DB_NAME:-temporal}
+      VISIBILITY_DBNAME: ${KRA_TEMPORAL_VISIBILITY_DB_NAME:-temporal_visibility}
+      # PostgreSQL bootstrap owns creation of these least-privilege databases.
+      SKIP_DB_CREATE: "true"
+      DEFAULT_NAMESPACE: ${TEMPORAL_NAMESPACE:-kra}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.49.1
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:8233:8080"
+
+  debezium:
+    image: quay.io/debezium/server:3.7.1.Final
+    restart: unless-stopped
+    volumes:
+      - ./debezium/application.properties:/debezium/config/application.properties:ro
+    environment:
+      KRA_DB_NAME: ${KRA_DB_NAME:-kra}
+      KRA_CDC_USER: ${KRA_CDC_USER:-kra_cdc}
+      KRA_CDC_PASSWORD: ${KRA_CDC_PASSWORD}
+      KRA_CDC_STATE_USER: ${KRA_CDC_STATE_USER:-kra_cdc_state}
+      KRA_CDC_STATE_PASSWORD: ${KRA_CDC_STATE_PASSWORD}
+      KRA_CDC_PUBLICATION: ${KRA_CDC_PUBLICATION:-kra_outbox_publication}
+      KRA_CDC_SLOT_NAME: ${KRA_CDC_SLOT_NAME:-kra_outbox_slot}
+      KRA_RABBITMQ_USER: ${KRA_RABBITMQ_USER:-kra}
+      KRA_RABBITMQ_PASSWORD: ${KRA_RABBITMQ_PASSWORD:-kra-local-only}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+
+volumes:
+  kra-postgres-data:
+    # Keep a stable, explicit local data-volume name.
+    name: infrastructure_kra-postgres-data

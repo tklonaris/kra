@@ -1,0 +1,10 @@
+services:
+  payment-manual-smoke:
+    image: jetbrains/intellij-http-client:263.7307.200
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/workdir/manual:ro
+    environment:
+      STRIPE_API_KEY: "${STRIPE_API_KEY:?Set STRIPE_API_KEY in .env before running the payment smoke test.}"
+    command: ["--no-progress", "-D", "manual/payment-smoke.http"]

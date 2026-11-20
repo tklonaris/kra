@@ -1,0 +1,23 @@
+[versions]
+kotlin = "2.4.10"
+spring-boot = "4.1.2"
+jooq = "3.21.9"
+archunit = "1.4.1"
+testcontainers = "2.0.5"
+stripe = "34.1.0"
+temporal = "1.40.0"
+spotless = "8.11.0"
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotlin" }
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+jooq-codegen = { id = "org.jooq.jooq-codegen-gradle", version.ref = "jooq" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+
+[libraries]
+archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
+testcontainers-postgres = { module = "org.testcontainers:testcontainers-postgresql", version.ref = "testcontainers" }
+stripe-java = { module = "com.stripe:stripe-java", version.ref = "stripe" }
+temporal-sdk = { module = "io.temporal:temporal-sdk", version.ref = "temporal" }
+temporal-testing = { module = "io.temporal:temporal-testing", version.ref = "temporal" }

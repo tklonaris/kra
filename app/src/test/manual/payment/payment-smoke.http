@@ -1,0 +1,165 @@
+###
+# Prerequisites:
+# - The local infrastructure and the payment-profile application are running and healthy.
+# - `stripe listen` forwards payment-intent events to localhost:8080/payment-requests/stripe/webhook.
+# - The Compose service receives STRIPE_API_KEY from the untracked root .env file.
+#
+# This checks the production Stripe client against test mode. It creates and confirms one intent,
+# verifies the signed webhook transition, then creates and cancels a separate intent.
+# The HTTP client runs in Docker; host.docker.internal resolves to the application on the host.
+@apiUrl = http://host.docker.internal:8080
+
+### Health
+GET {{apiUrl}}/actuator/health
+
+> {%
+client.test("application is healthy", () => client.assert(response.status === 200));
+%}
+
+### Accept payment request to confirm
+# @name createSucceededPayment
+POST {{apiUrl}}/payment-requests
+Idempotency-Key: {{$random.uuid}}
+Content-Type: application/json
+
+{
+  "purchaseReference": "{{$random.uuid}}",
+  "amountMinor": 1099,
+  "currency": "AUD"
+}
+
+> {%
+client.test("payment request is accepted", () => client.assert(response.status === 202));
+client.global.set("succeededPaymentRequestId", response.body.paymentRequestId);
+%}
+
+### Await Stripe intent creation
+< {%
+const paymentRequestId = client.global.get("succeededPaymentRequestId");
+const deadline = Date.now() + 60000;
+let payment = null;
+let lastFailure = null;
+while (Date.now() < deadline) {
+  try {
+    payment = JSON.parse(execFileSync("/usr/bin/wget", ["-q", "-O", "-", "-T", "5", `http://host.docker.internal:8080/payment-requests/${paymentRequestId}`], { timeout: 10000 }));
+    if (payment.payment?.status === "AWAITING_CUSTOMER" && payment.payment.stripePaymentIntentId) break;
+  } catch (failure) {
+    lastFailure = failure;
+  }
+  execFileSync("/bin/sleep", ["2"], { timeout: 3000 });
+}
+if (payment?.payment?.status !== "AWAITING_CUSTOMER" || !payment.payment.stripePaymentIntentId) throw new Error(`Timed out waiting for the first Stripe intent; last request=${JSON.stringify(payment)}, last failure=${lastFailure}`);
+client.global.set("succeededIntentId", payment.payment.stripePaymentIntentId);
+%}
+GET {{apiUrl}}/payment-requests/{{succeededPaymentRequestId}}
+
+> {%
+client.test("Stripe intent is ready for confirmation", () => {
+  client.assert(response.status === 200);
+  client.assert(response.body.payment.status === "AWAITING_CUSTOMER");
+  client.assert(response.body.payment.stripePaymentIntentId);
+});
+%}
+
+### Confirm the Stripe test-mode intent
+POST https://api.stripe.com/v1/payment_intents/{{succeededIntentId}}/confirm
+Authorization: Bearer {{$env.STRIPE_API_KEY}}
+Content-Type: application/x-www-form-urlencoded
+
+payment_method=pm_card_visa
+
+> {%
+client.test("Stripe confirms the test payment", () => {
+  client.assert(response.status === 200);
+  client.assert(response.body.status === "succeeded");
+});
+%}
+
+### Await signed success webhook processing
+< {%
+const paymentRequestId = client.global.get("succeededPaymentRequestId");
+const deadline = Date.now() + 60000;
+let payment = null;
+while (Date.now() < deadline) {
+  payment = JSON.parse(execFileSync("/usr/bin/wget", ["-q", "-O", "-", "-T", "5", `http://host.docker.internal:8080/payment-requests/${paymentRequestId}`], { timeout: 10000 }));
+  if (payment.payment?.status === "SUCCEEDED") break;
+  execFileSync("/bin/sleep", ["2"], { timeout: 3000 });
+}
+if (payment?.payment?.status !== "SUCCEEDED") throw new Error(`Timed out waiting for the signed success webhook; last request=${JSON.stringify(payment)}`);
+%}
+GET {{apiUrl}}/payment-requests/{{succeededPaymentRequestId}}
+
+> {%
+client.test("signed Stripe success webhook settles the payment", () => {
+  client.assert(response.status === 200);
+  client.assert(response.body.payment.status === "SUCCEEDED");
+  client.assert(response.body.payment.stripePaymentIntentId === client.global.get("succeededIntentId"));
+});
+%}
+
+### Accept payment request to cancel
+# @name createCancelledPayment
+POST {{apiUrl}}/payment-requests
+Idempotency-Key: {{$random.uuid}}
+Content-Type: application/json
+
+{
+  "purchaseReference": "{{$random.uuid}}",
+  "amountMinor": 1099,
+  "currency": "AUD"
+}
+
+> {%
+client.test("cancellation payment request is accepted", () => client.assert(response.status === 202));
+client.global.set("cancelledPaymentRequestId", response.body.paymentRequestId);
+%}
+
+### Await Stripe intent creation before cancellation
+< {%
+const paymentRequestId = client.global.get("cancelledPaymentRequestId");
+const deadline = Date.now() + 60000;
+let payment = null;
+while (Date.now() < deadline) {
+  payment = JSON.parse(execFileSync("/usr/bin/wget", ["-q", "-O", "-", "-T", "5", `http://host.docker.internal:8080/payment-requests/${paymentRequestId}`], { timeout: 10000 }));
+  if (payment.payment?.status === "AWAITING_CUSTOMER" && payment.payment.stripePaymentIntentId) break;
+  execFileSync("/bin/sleep", ["2"], { timeout: 3000 });
+}
+if (payment?.payment?.status !== "AWAITING_CUSTOMER" || !payment.payment.stripePaymentIntentId) throw new Error(`Timed out waiting for the cancellation Stripe intent; last request=${JSON.stringify(payment)}`);
+%}
+GET {{apiUrl}}/payment-requests/{{cancelledPaymentRequestId}}
+
+> {%
+client.test("Stripe intent is ready for cancellation", () => {
+  client.assert(response.status === 200);
+  client.assert(response.body.payment.status === "AWAITING_CUSTOMER");
+  client.assert(response.body.payment.stripePaymentIntentId);
+});
+%}
+
+### Request cancellation
+POST {{apiUrl}}/payment-requests/{{cancelledPaymentRequestId}}/cancellations
+
+> {%
+client.test("payment cancellation is accepted", () => client.assert(response.status === 202));
+%}
+
+### Await Stripe cancellation and signed webhook processing
+< {%
+const paymentRequestId = client.global.get("cancelledPaymentRequestId");
+const deadline = Date.now() + 60000;
+let payment = null;
+while (Date.now() < deadline) {
+  payment = JSON.parse(execFileSync("/usr/bin/wget", ["-q", "-O", "-", "-T", "5", `http://host.docker.internal:8080/payment-requests/${paymentRequestId}`], { timeout: 10000 }));
+  if (payment.payment?.status === "CANCELLED") break;
+  execFileSync("/bin/sleep", ["2"], { timeout: 3000 });
+}
+if (payment?.payment?.status !== "CANCELLED") throw new Error(`Timed out waiting for Stripe cancellation; last request=${JSON.stringify(payment)}`);
+%}
+GET {{apiUrl}}/payment-requests/{{cancelledPaymentRequestId}}
+
+> {%
+client.test("Stripe cancellation settles the payment", () => {
+  client.assert(response.status === 200);
+  client.assert(response.body.payment.status === "CANCELLED");
+});
+%}
